@@ -25,9 +25,31 @@ class IP:
                 self.callback(src_addr, dst_addr, payload)
         else:
             # atua como roteador
-            next_hop = self._next_hop(dst_addr)
-            # TODO: Trate corretamente o campo TTL do datagrama
-            self.enlace.enviar(datagrama, next_hop)
+            if ttl <= 1:
+                # O TTL expirou: descarta o datagrama e envia ICMP Time Exceeded
+                icmp_header = struct.pack('!BBHI', 11, 0, 0, 0)
+                icmp_dados = icmp_header + datagrama[:28]
+                icmp_checksum = calc_checksum(icmp_dados)
+                icmp_payload = struct.pack('!BBHI', 11, 0, icmp_checksum, 0) + datagrama[:28]
+
+                total_len = 20 + len(icmp_payload)
+                cabecalho = struct.pack('!BBHHHBBH', (4 << 4) | 5, 0, total_len,
+                                        0, 0, 64, IPPROTO_ICMP, 0) + \
+                    str2addr(self.meu_endereco or '0.0.0.0') + str2addr(src_addr)
+                checksum = calc_checksum(cabecalho)
+                cabecalho = cabecalho[:10] + struct.pack('!H', checksum) + cabecalho[12:]
+                datagrama_icmp = cabecalho + icmp_payload
+
+                next_hop = self._next_hop(src_addr)
+                self.enlace.enviar(datagrama_icmp, next_hop)
+            else:
+                next_hop = self._next_hop(dst_addr)
+                ihl = datagrama[0] & 0x0f
+                datagrama = bytearray(datagrama)
+                datagrama[8] -= 1
+                datagrama[10:12] = b'\x00\x00'
+                datagrama[10:12] = struct.pack('!H', calc_checksum(bytes(datagrama[:4 * ihl])))
+                self.enlace.enviar(bytes(datagrama), next_hop)
 
     def _next_hop(self, dest_addr):
         dest, = struct.unpack('!I', str2addr(dest_addr))
